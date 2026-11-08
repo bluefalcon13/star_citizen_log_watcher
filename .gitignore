@@ -1,0 +1,36 @@
+# Binaries and executables
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test artifacts
+*.test
+*.test.exe
+*.out
+.gotmp/
+
+# Star Citizen raw logs and example logs
+example_logs/
+*.log
+*.log.old
+
+# Local persistent state cache
+**/.sc_latent_state.json
+.sc_latent_state.json
+
+# Generated forensic reports
+Forensic_Report*.md
+Game_Report*.md
+Massive_combined_report*.md
+!Combined_Forensic_Report.md
+
+# IDE and OS metadata
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
