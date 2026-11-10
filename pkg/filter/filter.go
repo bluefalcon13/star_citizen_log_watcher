@@ -1,7 +1,9 @@
 package filter
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -11,7 +13,20 @@ import (
 
 var defaultTimestampRegex = regexp.MustCompile(`^<(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)>`)
 
-// Filter defines the interface for evaluating raw log lines against specific bug signatures.
+// FilterConfig represents a single user-editable filter definition in filters.json.
+type FilterConfig struct {
+	Name                string              `json:"name"`
+	Enabled             bool                `json:"enabled"`
+	EventType           models.EventType    `json:"event_type"`
+	Severity            models.Severity     `json:"severity"`
+	Pattern             string              `json:"pattern"`
+	ExtractType         string              `json:"extract_type,omitempty"`
+	TargetState         models.SessionState `json:"target_state,omitempty"`
+	Meaning             string              `json:"meaning"`
+	ActiveInvestigation bool                `json:"active_investigation"`
+}
+
+// Filter defines the interface for evaluating raw log lines against specific signatures.
 type Filter interface {
 	Name() string
 	Type() models.EventType
@@ -24,11 +39,14 @@ type ExtractFunc func(matches []string, line string) (missionID string, errorGUI
 
 // PatternFilter is a regex-backed implementation of the Filter interface.
 type PatternFilter struct {
-	name      string
-	eventType models.EventType
-	severity  models.Severity
-	regex     *regexp.Regexp
-	extract   ExtractFunc
+	name                string
+	eventType           models.EventType
+	severity            models.Severity
+	regex               *regexp.Regexp
+	extract             ExtractFunc
+	meaning             string
+	targetState         models.SessionState
+	activeInvestigation bool
 }
 
 // NewPatternFilter creates an initialized PatternFilter instance.
@@ -44,7 +62,67 @@ func NewPatternFilter(name string, eventType models.EventType, severity models.S
 		severity:  severity,
 		regex:     re,
 		extract:   extract,
+		meaning:   name,
 	}, nil
+}
+
+// NewPatternFilterFromConfig constructs a PatternFilter from a declarative FilterConfig.
+func NewPatternFilterFromConfig(cfg FilterConfig) (*PatternFilter, error) {
+	extract := buildExtractor(cfg.ExtractType, cfg.Meaning)
+	pf, err := NewPatternFilter(cfg.Name, cfg.EventType, cfg.Severity, cfg.Pattern, extract)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Meaning != "" {
+		pf.meaning = cfg.Meaning
+	}
+	pf.targetState = cfg.TargetState
+	pf.activeInvestigation = cfg.ActiveInvestigation
+	return pf, nil
+}
+
+func buildExtractor(extractType string, meaning string) ExtractFunc {
+	switch strings.ToLower(extractType) {
+	case "mission_id":
+		return func(matches []string, line string) (string, string, string) {
+			for i := 1; i < len(matches); i++ {
+				if matches[i] != "" {
+					return matches[i], "", strings.TrimSpace(line)
+				}
+			}
+			return "", "", strings.TrimSpace(line)
+		}
+	case "error_guid":
+		return func(matches []string, line string) (string, string, string) {
+			if len(matches) > 1 {
+				return "", matches[1], strings.TrimSpace(line)
+			}
+			return "", "", strings.TrimSpace(line)
+		}
+	case "status":
+		return func(matches []string, line string) (string, string, string) {
+			detail := strings.TrimSpace(line)
+			if len(matches) > 1 {
+				detail = fmt.Sprintf("Status: %s", matches[1])
+			}
+			return "", "", detail
+		}
+	case "result":
+		return func(matches []string, line string) (string, string, string) {
+			detail := strings.TrimSpace(line)
+			if len(matches) > 1 {
+				detail = fmt.Sprintf("Result: %s", matches[1])
+			}
+			return "", "", detail
+		}
+	default:
+		return func(matches []string, line string) (string, string, string) {
+			if meaning != "" {
+				return "", "", meaning
+			}
+			return "", "", strings.TrimSpace(line)
+		}
+	}
 }
 
 // Name returns the descriptive name of the filter.
@@ -78,15 +156,30 @@ func (pf *PatternFilter) Match(line string, timestamp string) (*models.Event, bo
 		details = strings.TrimSpace(line)
 	}
 
+	plainMeaning := pf.meaning
+	if plainMeaning == "" {
+		plainMeaning = string(pf.eventType)
+	}
+	if missionID != "" {
+		plainMeaning = fmt.Sprintf("%s [Mission: %s]", plainMeaning, missionID)
+	} else if errorGUID != "" {
+		plainMeaning = fmt.Sprintf("%s [GUID: %s]", plainMeaning, errorGUID)
+	} else if len(matches) > 1 && matches[1] != "" {
+		plainMeaning = fmt.Sprintf("%s (%s)", plainMeaning, matches[1])
+	}
+
 	return &models.Event{
-		Timestamp: timestamp,
-		Type:      pf.eventType,
-		Severity:  pf.severity,
-		MissionID: missionID,
-		ErrorGUID: errorGUID,
-		Details:   details,
-		RawLine:   line,
-		ParsedAt:  time.Now().UTC(),
+		Timestamp:           timestamp,
+		Type:                pf.eventType,
+		Severity:            pf.severity,
+		MissionID:           missionID,
+		ErrorGUID:           errorGUID,
+		Meaning:             plainMeaning,
+		Details:             details,
+		RawLine:             line,
+		ParsedAt:            time.Now().UTC(),
+		TargetState:         pf.targetState,
+		ActiveInvestigation: pf.activeInvestigation,
 	}, true
 }
 
@@ -138,175 +231,321 @@ func (r *Registry) Evaluate(line string) (*models.Event, bool) {
 	return nil, false
 }
 
-// NewDefaultRegistry creates a fully-populated Registry containing all forensic filters
-// specified in docs/draft_contract_filter.md, docs/log_patterns.md, and session state lifecycles.
-func NewDefaultRegistry() (*Registry, error) {
+// DefaultFilterConfigs returns the default list of filter definitions.
+func DefaultFilterConfigs() []FilterConfig {
+	return []FilterConfig{
+		{
+			Name:                "Mission Accepted",
+			Enabled:             true,
+			EventType:           models.EventMissionAccepted,
+			Severity:            models.SeverityInfo,
+			Pattern:             `Contract Accepted: .* MissionId: \[([a-f0-9\-]{36})\]`,
+			ExtractType:         "mission_id",
+			TargetState:         models.SessionStateGameplay,
+			Meaning:             "Player accepted a contract",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Mission Completed",
+			Enabled:             true,
+			EventType:           models.EventMissionCompleted,
+			Severity:            models.SeverityInfo,
+			Pattern:             `(?:Contract Complete: .* MissionId: \[([a-f0-9\-]{36})\]|<EndMission>.*MissionId\[([a-f0-9\-]{36})\].*CompletionType\[Complete\])`,
+			ExtractType:         "mission_id",
+			Meaning:             "Contract completed successfully",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Mission Failed",
+			Enabled:             true,
+			EventType:           models.EventMissionFailed,
+			Severity:            models.SeverityWarning,
+			Pattern:             `(?:Contract Failed: .* MissionId: \[([a-f0-9\-]{36})\]|<EndMission>.*MissionId\[([a-f0-9\-]{36})\].*CompletionType\[Fail\w*\])`,
+			ExtractType:         "mission_id",
+			Meaning:             "Contract failed",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Mission Abandoned",
+			Enabled:             true,
+			EventType:           models.EventMissionAbandoned,
+			Severity:            models.SeverityWarning,
+			Pattern:             `(?:Contract Abandoned: .* MissionId: \[([a-f0-9\-]{36})\]|<EndMission>.*MissionId\[([a-f0-9\-]{36})\].*CompletionType\[Abandon\])`,
+			ExtractType:         "mission_id",
+			Meaning:             "Contract abandoned by player",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Objective Spawned",
+			Enabled:             true,
+			EventType:           models.EventObjectiveSpawned,
+			Severity:            models.SeverityInfo,
+			Pattern:             `CLocalMissionPhaseMarker::CreateMarker.*missionId \[([a-f0-9\-]{36})\]`,
+			ExtractType:         "mission_id",
+			TargetState:         models.SessionStateGameplay,
+			Meaning:             "Mission objective marker spawned in world",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Missing Player ObjectDataBank",
+			Enabled:             true,
+			EventType:           models.EventMissingDataBank,
+			Severity:            models.SeverityCritical,
+			Pattern:             `<CObjectiveMarkerComponent::(?:AddTo|RemoveFrom)PlayerDataBank> (MissionObjectiveMarker_\d+\[\d+\]) - Player: .* has no ObjectDataBank`,
+			ExtractType:         "none",
+			Meaning:             "ACTIVE INVESTIGATION: Player entity has no ObjectDataBank for mission objective marker",
+			ActiveInvestigation: true,
+		},
+		{
+			Name:                "Objective Marker DataBank Added",
+			Enabled:             true,
+			EventType:           models.EventMarkerDataBankAdded,
+			Severity:            models.SeverityInfo,
+			Pattern:             `<CObjectiveMarkerComponent::AddToPlayerDataBank> (MissionObjectiveMarker_\d+\[\d+\]) - Added to DataBank`,
+			ExtractType:         "none",
+			Meaning:             "Objective marker bound to player DataBank",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Objective Marker DataBank Removed",
+			Enabled:             true,
+			EventType:           models.EventMarkerDataBankRemoved,
+			Severity:            models.SeverityWarning,
+			Pattern:             `<CObjectiveMarkerComponent::RemoveFromPlayerDataBank> (MissionObjectiveMarker_\d+\[\d+\]) - Removed from DataBank`,
+			ExtractType:         "none",
+			Meaning:             "Objective marker unbound from player DataBank",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Proximity Loss ('Return to' Loop)",
+			Enabled:             true,
+			EventType:           models.EventProximityLoss,
+			Severity:            models.SeverityCritical,
+			Pattern:             `<SHUDEvent_OnNotification> Added notification "New Objective: Return to [^"]+".*MissionId: \[([a-f0-9\-]{36})\]`,
+			ExtractType:         "mission_id",
+			Meaning:             "ACTIVE INVESTIGATION: Mission lost player proximity and triggered 'Return to' local objective loop",
+			ActiveInvestigation: true,
+		},
+		{
+			Name:                "Collector Contract Generator Storm",
+			Enabled:             true,
+			EventType:           models.EventLocationStorm,
+			Severity:            models.SeverityWarning,
+			Pattern:             `<GenerateLocationProperty> Generated Locations .* contract: (TheCollector_\S+)`,
+			ExtractType:         "none",
+			Meaning:             "Wikelo / Collector contract generator location spam (server/reputation noise)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Login Identity Metadata Fault",
+			Enabled:             true,
+			EventType:           models.EventIdentityFault,
+			Severity:            models.SeverityWarning,
+			Pattern:             `<GetSubscriptionKey Failed>.*No player Id was found in metadata`,
+			ExtractType:         "none",
+			Meaning:             "Login metadata missing player ID (GetSubscriptionKey UNAUTHENTICATED)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Hyperion Engineering Wing Objective",
+			Enabled:             true,
+			EventType:           models.EventHyperionStage,
+			Severity:            models.SeverityInfo,
+			Pattern:             `<SHUDEvent_OnNotification> Added notification "New Objective: Retrieve One of the Reagent Codes in Engineering Wing: ".*MissionId: \[([a-f0-9\-]{36})\]`,
+			ExtractType:         "mission_id",
+			Meaning:             "Hyperion: Arrived at ASD Onyx Facility (Engineering Wing objective active)",
+			ActiveInvestigation: true,
+		},
+		{
+			Name:                "Hyperion Interior Triggered",
+			Enabled:             true,
+			EventType:           models.EventHyperionStage,
+			Severity:            models.SeverityInfo,
+			Pattern:             `<SHUDEvent_OnNotification> Added notification "New Objective: Obtain Thermal (?:Vent|Condenser) Diagnostic Data.*MissionId: \[([a-f0-9\-]{36})\]`,
+			ExtractType:         "mission_id",
+			Meaning:             "Hyperion: Engineering Wing interior Subsumption trigger fired (Healthy)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Deferred Explosion RayCast (Worm Spawn)",
+			Enabled:             true,
+			EventType:           models.EventDeferredExplosion,
+			Severity:            models.SeverityInfo,
+			Pattern:             `CDeferredExplosionEffect::RequestRayCast has no grid set, defaulting to global grid`,
+			ExtractType:         "none",
+			Meaning:             "Deferred Explosion RayCast (Hyperion bridge worm spawn / encounter trigger)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Application Launch / Log Header",
+			Enabled:             true,
+			EventType:           models.EventStateTransition,
+			Severity:            models.SeverityNotice,
+			Pattern:             `BackupNameAttachment="\s*([^"]+)"`,
+			TargetState:         models.SessionStateAppLaunch,
+			Meaning:             "Application Launch",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "DGS Failure",
+			Enabled:             true,
+			EventType:           models.EventDGSFailure,
+			Severity:            models.SeverityCritical,
+			Pattern:             `!!! Failed to register RPC \[RPC\.DGS\..*\]`,
+			ExtractType:         "none",
+			Meaning:             "DGS RPC registration failed",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Subsumption Error",
+			Enabled:             true,
+			EventType:           models.EventSubsumptionError,
+			Severity:            models.SeverityError,
+			Pattern:             `\[Error\] <\[Subsumption::ErrorReporter\]> .* \(GUID:([a-f0-9\-]{36})\)`,
+			ExtractType:         "error_guid",
+			Meaning:             "Subsumption ErrorReporter logged a GUID issue",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Subsumption Mismatch",
+			Enabled:             true,
+			EventType:           models.EventSubsumptionMismatch,
+			Severity:            models.SeverityError,
+			Pattern:             `Failed to create Subsumption (?:task|variable|dependency) .* associated with the guid '([a-f0-9\-]{36})'`,
+			ExtractType:         "error_guid",
+			Meaning:             "Subsumption missing archetype or dependency GUID",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Contract Status",
+			Enabled:             true,
+			EventType:           models.EventContractStatus,
+			Severity:            models.SeverityInfo,
+			Pattern:             `CContractGenerator::CContractGenerator.*(completed|failed|closed|Status:\s*\w+)`,
+			ExtractType:         "status",
+			Meaning:             "Contract generator updated contract status",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Contract Init",
+			Enabled:             true,
+			EventType:           models.EventContractInit,
+			Severity:            models.SeverityNotice,
+			Pattern:             `CContractGenerator::CContractGenerator`,
+			ExtractType:         "none",
+			Meaning:             "Contract generator subsystem initialized",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Mission Result",
+			Enabled:             true,
+			EventType:           models.EventMissionResult,
+			Severity:            models.SeverityInfo,
+			Pattern:             `(?i)(?:Contract|Mission).*?(?:result|outcome)\s+is\s+(Success|Failure|Completed|Failed)`,
+			ExtractType:         "result",
+			Meaning:             "Engine validated mission outcome",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Main Menu Loaded",
+			Enabled:             true,
+			EventType:           models.EventStateTransition,
+			Severity:            models.SeverityNotice,
+			Pattern:             `(?i)(?:RequestFrontEndReason="ProcessBootRequest"|Requesting game mode Frontend_Main/SC_Frontend|CEntityComponentFrontendPUUIProvider::AddAccessibleDestinations)`,
+			TargetState:         models.SessionStateMenu,
+			Meaning:             "Main Menu loaded",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Joining Server Handshake",
+			Enabled:             true,
+			EventType:           models.EventStateTransition,
+			Severity:            models.SeverityNotice,
+			Pattern:             `(?i)(?:remoteAddr=\d+\.\d+\.\d+\.\d+.*gamerules="SC_Frontend"|CDisciplineServiceExternal::BeginSession|gamerules="SC_Default".*taskname="ModelWaitForViews"|ConnectToServer)`,
+			TargetState:         models.SessionStateJoiningServer,
+			Meaning:             "Connecting to game server (DGS handshake)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Gameplay Spawn Complete",
+			Enabled:             true,
+			EventType:           models.EventStateTransition,
+			Severity:            models.SeverityNotice,
+			Pattern:             `(?i)(?:taskname="StopLoadingScreen".*gamerules="SC_Default"|taskname="OnClientEnteredGame".*gamerules="SC_Default"|Local player spawned|Client entered world)`,
+			TargetState:         models.SessionStateGameplay,
+			Meaning:             "Entered game world (Gameplay active)",
+			ActiveInvestigation: false,
+		},
+		{
+			Name:                "Server Disconnect / Exit Menu",
+			Enabled:             true,
+			EventType:           models.EventServerDisconnect,
+			Severity:            models.SeverityNotice,
+			Pattern:             `(?i)(?:Remote Disconnect - Player requested disconnect|EALobbyQuit.*RequestQuitLobby|\[CSessionManager::RequestFrontEnd\] Restored)`,
+			TargetState:         models.SessionStateMenu,
+			Meaning:             "Disconnected from server (returned to Main Menu)",
+			ActiveInvestigation: false,
+		},
+	}
+}
+
+// NewRegistryFromConfigs compiles and registers all enabled FilterConfigs.
+func NewRegistryFromConfigs(configs []FilterConfig) (*Registry, error) {
 	reg := NewRegistry()
-
-	guidExtractor := func(matches []string, line string) (string, string, string) {
-		if len(matches) > 1 {
-			return matches[1], "", strings.TrimSpace(line)
+	for _, cfg := range configs {
+		if !cfg.Enabled {
+			continue
 		}
-		return "", "", strings.TrimSpace(line)
-	}
-
-	errorGUIDExtractor := func(matches []string, line string) (string, string, string) {
-		if len(matches) > 1 {
-			return "", matches[1], strings.TrimSpace(line)
-		}
-		return "", "", strings.TrimSpace(line)
-	}
-
-	plainExtractor := func(matches []string, line string) (string, string, string) {
-		return "", "", strings.TrimSpace(line)
-	}
-
-	statusExtractor := func(matches []string, line string) (string, string, string) {
-		detail := strings.TrimSpace(line)
-		if len(matches) > 1 {
-			detail = fmt.Sprintf("Status: %s", matches[1])
-		}
-		return "", "", detail
-	}
-
-	definitions := []struct {
-		name      string
-		eventType models.EventType
-		severity  models.Severity
-		pattern   string
-		extract   ExtractFunc
-	}{
-		// Contract & Mission Events
-		{
-			name:      "Mission Accepted",
-			eventType: models.EventMissionAccepted,
-			severity:  models.SeverityInfo,
-			pattern:   `Contract Accepted: .* MissionId: \[([a-f0-9\-]{36})\]`,
-			extract:   guidExtractor,
-		},
-		{
-			name:      "Mission Completed",
-			eventType: models.EventMissionCompleted,
-			severity:  models.SeverityInfo,
-			pattern:   `Contract Complete: .* MissionId: \[([a-f0-9\-]{36})\]`,
-			extract:   guidExtractor,
-		},
-		{
-			name:      "Mission Failed",
-			eventType: models.EventMissionFailed,
-			severity:  models.SeverityWarning,
-			pattern:   `Contract Failed: .* MissionId: \[([a-f0-9\-]{36})\]`,
-			extract:   guidExtractor,
-		},
-		{
-			name:      "Mission Abandoned",
-			eventType: models.EventMissionAbandoned,
-			severity:  models.SeverityWarning,
-			pattern:   `Contract Abandoned: .* MissionId: \[([a-f0-9\-]{36})\]`,
-			extract:   guidExtractor,
-		},
-		{
-			name:      "Objective Spawned",
-			eventType: models.EventObjectiveSpawned,
-			severity:  models.SeverityInfo,
-			pattern:   `CLocalMissionPhaseMarker::CreateMarker.*missionId \[([a-f0-9\-]{36})\]`,
-			extract:   guidExtractor,
-		},
-		{
-			name:      "DGS Failure",
-			eventType: models.EventDGSFailure,
-			severity:  models.SeverityCritical,
-			pattern:   `!!! Failed to register RPC \[RPC\.DGS\..*\]`,
-			extract:   plainExtractor,
-		},
-		{
-			name:      "Subsumption Error",
-			eventType: models.EventSubsumptionError,
-			severity:  models.SeverityError,
-			pattern:   `\[Error\] <\[Subsumption::ErrorReporter\]> .* \(GUID:([a-f0-9\-]{36})\)`,
-			extract:   errorGUIDExtractor,
-		},
-		{
-			name:      "Subsumption Mismatch",
-			eventType: models.EventSubsumptionMismatch,
-			severity:  models.SeverityError,
-			pattern:   `Failed to create Subsumption (?:task|variable|dependency) .* associated with the guid '([a-f0-9\-]{36})'`,
-			extract:   errorGUIDExtractor,
-		},
-		{
-			name:      "Contract Status",
-			eventType: models.EventContractStatus,
-			severity:  models.SeverityInfo,
-			pattern:   `CContractGenerator::CContractGenerator.*(?:completed|failed|closed|Status:\s*\w+)`,
-			extract:   statusExtractor,
-		},
-		{
-			name:      "Contract Init",
-			eventType: models.EventContractInit,
-			severity:  models.SeverityNotice,
-			pattern:   `CContractGenerator::CContractGenerator`,
-			extract:   plainExtractor,
-		},
-		{
-			name:      "Mission Result",
-			eventType: models.EventMissionResult,
-			severity:  models.SeverityInfo,
-			pattern:   `(?i)(?:Contract|Mission).*?(?:result|outcome)\s+is\s+(Success|Failure|Completed|Failed)`,
-			extract: func(matches []string, line string) (string, string, string) {
-				detail := strings.TrimSpace(line)
-				if len(matches) > 1 {
-					detail = fmt.Sprintf("Result: %s", matches[1])
-				}
-				return "", "", detail
-			},
-		},
-
-		// Lifecycle State Transition Events
-		{
-			name:      "Main Menu Loaded",
-			eventType: models.EventStateTransition,
-			severity:  models.SeverityNotice,
-			pattern:   `(?i)(?:RequestFrontEndReason="ProcessBootRequest"|gamerules="SC_Frontend"|CEntityComponentFrontendPUUIProvider::AddAccessibleDestinations)`,
-			extract: func(matches []string, line string) (string, string, string) {
-				return "", "", "State Transition: Main Menu / FrontEnd"
-			},
-		},
-		{
-			name:      "Joining Server Handshake",
-			eventType: models.EventStateTransition,
-			severity:  models.SeverityNotice,
-			pattern:   `(?i)(?:remoteAddr=\d+\.\d+\.\d+\.\d+.*gamerules="SC_Frontend"|CDisciplineServiceExternal::BeginSession|gamerules="SC_Default".*taskname="ModelWaitForViews"|ConnectToServer)`,
-			extract: func(matches []string, line string) (string, string, string) {
-				return "", "", "State Transition: Joining Server (DGS Handshake)"
-			},
-		},
-		{
-			name:      "Gameplay Spawn Complete",
-			eventType: models.EventStateTransition,
-			severity:  models.SeverityNotice,
-			pattern:   `(?i)(?:taskname="StopLoadingScreen".*gamerules="SC_Default"|taskname="OnClientEnteredGame".*gamerules="SC_Default"|Local player spawned|Client entered world)`,
-			extract: func(matches []string, line string) (string, string, string) {
-				return "", "", "State Transition: Gameplay (In-World)"
-			},
-		},
-		{
-			name:      "Server Disconnect / Exit Menu",
-			eventType: models.EventServerDisconnect,
-			severity:  models.SeverityNotice,
-			pattern:   `(?i)(?:Remote Disconnect - Player requested disconnect|EALobbyQuit.*RequestQuitLobby|\[CSessionManager::RequestFrontEnd\] Restored)`,
-			extract: func(matches []string, line string) (string, string, string) {
-				return "", "", "State Transition: Server Disconnect (Returned to Menu)"
-			},
-		},
-	}
-
-	for _, def := range definitions {
-		f, err := NewPatternFilter(def.name, def.eventType, def.severity, def.pattern, def.extract)
+		pf, err := NewPatternFilterFromConfig(cfg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize filter %q: %w", def.name, err)
+			return nil, fmt.Errorf("failed to initialize filter %q: %w", cfg.Name, err)
 		}
-		reg.Register(f)
+		reg.Register(pf)
 	}
-
 	return reg, nil
+}
+
+// NewDefaultRegistry creates a Registry populated with DefaultFilterConfigs.
+func NewDefaultRegistry() (*Registry, error) {
+	return NewRegistryFromConfigs(DefaultFilterConfigs())
+}
+
+// SaveFilterConfigs writes filter configurations as formatted JSON to the specified file path.
+func SaveFilterConfigs(path string, configs []FilterConfig) error {
+	data, err := json.MarshalIndent(configs, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize filter configs: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("failed to write filter config file %s: %w", path, err)
+	}
+	return nil
+}
+
+// LoadRegistryFromFile reads a JSON filter configuration file and returns a compiled Registry.
+func LoadRegistryFromFile(path string) (*Registry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read filter config file %s: %w", path, err)
+	}
+	var configs []FilterConfig
+	if err := json.Unmarshal(data, &configs); err != nil {
+		return nil, fmt.Errorf("failed to parse filter config JSON in %s: %w", path, err)
+	}
+	return NewRegistryFromConfigs(configs)
+}
+
+// LoadOrCreateRegistry loads filters from path if it exists, or creates a default filters.json file if missing.
+func LoadOrCreateRegistry(path string) (*Registry, error) {
+	if path == "" {
+		return NewDefaultRegistry()
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		defaults := DefaultFilterConfigs()
+		if saveErr := SaveFilterConfigs(path, defaults); saveErr != nil {
+			return nil, saveErr
+		}
+		return NewRegistryFromConfigs(defaults)
+	}
+	return LoadRegistryFromFile(path)
 }

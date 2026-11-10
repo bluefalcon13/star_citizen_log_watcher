@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
+	"strings"
 	"time"
 
 	"StarCitizenLogWatcher/internal/state"
+	"StarCitizenLogWatcher/pkg/models"
 )
 
 const (
@@ -46,38 +49,102 @@ func (d *Dashboard) RenderStatic(snap state.Snapshot, outputPath string) {
 	fmt.Fprintf(d.writer, "\n%s=== STAR CITIZEN LOG WATCHER: FORENSIC TELEMETRY COMPLETE ===%s\n", ansiCyan, ansiReset)
 	fmt.Fprintf(d.writer, "Total Lines Processed    : %d\n", snap.TotalLinesProcessed)
 	fmt.Fprintf(d.writer, "Final Session State      : %s (Server Sessions: %d)\n", snap.CurrentSessionState, snap.ServerSessionIndex)
-
-	// Subsumption Startup Health Check
-	fmt.Fprintf(d.writer, "Client Subsumption AI    : ")
-	if snap.IsStartupSubsumptionBroken {
-		fmt.Fprintf(d.writer, "%s[CRITICAL] FAILED ON STARTUP (%d launch error(s))%s\n", ansiRed, snap.StartupSubsumptionErrCount, ansiReset)
-		fmt.Fprintf(d.writer, "  %s--> Player was ephemeral: Subsumption failed before joining gameplay due to latent ghost contract.%s\n", ansiYellow, ansiReset)
-	} else {
-		fmt.Fprintf(d.writer, "%s[NOMINAL] No startup initialization failures detected%s\n", ansiGreen, ansiReset)
-	}
-
-	fmt.Fprintf(d.writer, "Subsumption Total Errors : %d\n", snap.SubsumptionErrCount)
-	fmt.Fprintf(d.writer, "DGS RPC Failures         : %d\n", snap.DGSFailureCount)
+	fmt.Fprintf(d.writer, "Subsumption Log Entries  : %d\n", snap.SubsumptionErrCount)
+	fmt.Fprintf(d.writer, "DGS RPC Notices          : %d\n", snap.DGSFailureCount)
 	if snap.LastMissionID != "" {
 		fmt.Fprintf(d.writer, "Last Mission ID          : %s [%s]\n", snap.LastMissionID, snap.LastMissionStatus)
 	}
 
+	if len(snap.ContractLedger) > 0 {
+		d.renderContractTable(snap)
+	}
+
+	if len(snap.StateChanges) > 0 {
+		fmt.Fprintf(d.writer, "\n%s--- Detected State & Contract Changes (Recent) ---%s\n", ansiCyan, ansiReset)
+		for _, ev := range snap.StateChanges {
+			ts := formatTimestampShort(ev.Timestamp)
+			fmt.Fprintf(d.writer, "  [%s] (%s) %s\n", ts, ev.SessionState, ev.Meaning)
+		}
+	}
+
+	if len(snap.RecentEvents) > 0 {
+		fmt.Fprintf(d.writer, "\n%s--- Recent Log Entries (Plain English) ---%s\n", ansiCyan, ansiReset)
+		for _, ev := range snap.RecentEvents {
+			ts := formatTimestampShort(ev.Timestamp)
+			fmt.Fprintf(d.writer, "  [%s] [%s] %s\n", ts, ev.Type, ev.Meaning)
+		}
+	}
+
+	// Only display Active Investigation alerts if enabled in filters.json and triggered
 	if len(snap.DesyncIncidents) > 0 {
-		fmt.Fprintf(d.writer, "\n%s[!] SMOKING GUN: %d Desync / Corruption Incident(s) Detected!%s\n", ansiRed, len(snap.DesyncIncidents), ansiReset)
+		fmt.Fprintf(d.writer, "\n%s[!] ACTIVE INVESTIGATION INCIDENTS: %d Alert(s) Detected!%s\n", ansiRed, len(snap.DesyncIncidents), ansiReset)
 		for i, inc := range snap.DesyncIncidents {
-			startupFlag := ""
-			if inc.IsStartupError {
-				startupFlag = "[LAUNCH SYMPTOM] "
-			}
-			fmt.Fprintf(d.writer, "    #%d: %s%s (Target: %s)\n", i+1, startupFlag, inc.Description, inc.MissionID)
+			fmt.Fprintf(d.writer, "    #%d: %s (Target: %s)\n", i+1, inc.Description, inc.MissionID)
 			if inc.HistoricalLink != "" {
 				fmt.Fprintf(d.writer, "        %s--> %s%s\n", ansiGreen, inc.HistoricalLink, ansiReset)
 			}
 		}
-	} else {
-		fmt.Fprintf(d.writer, "%s[+] No Desync Incident Detected.%s\n", ansiGreen, ansiReset)
 	}
+
 	fmt.Fprintf(d.writer, "\nFull Forensic Report     : %s\n\n", outputPath)
+}
+
+// RenderContracts prints a focused summary of all accepted contracts and their outcomes to the terminal.
+func (d *Dashboard) RenderContracts(snap state.Snapshot, outputPath string) {
+	fmt.Fprintf(d.writer, "\n%s=== STAR CITIZEN CONTRACT LEDGER SCRAPER ===%s\n", ansiCyan, ansiReset)
+	fmt.Fprintf(d.writer, "Total Lines Processed    : %d\n", snap.TotalLinesProcessed)
+	fmt.Fprintf(d.writer, "Total Contracts Accepted : %d\n", len(snap.ContractLedger))
+
+	if len(snap.ContractLedger) == 0 {
+		fmt.Fprintf(d.writer, "\n  No accepted contracts found in the scanned log(s).\n")
+	} else {
+		d.renderContractTable(snap)
+	}
+
+	if len(snap.DesyncIncidents) > 0 {
+		fmt.Fprintf(d.writer, "\n%s[!] ACTIVE INVESTIGATION INCIDENTS: %d Alert(s) Detected!%s\n", ansiRed, len(snap.DesyncIncidents), ansiReset)
+		for i, inc := range snap.DesyncIncidents {
+			fmt.Fprintf(d.writer, "    #%d: %s (Target: %s)\n", i+1, inc.Description, inc.MissionID)
+		}
+	}
+
+	fmt.Fprintf(d.writer, "\nFull Forensic Report     : %s\n\n", outputPath)
+}
+
+func (d *Dashboard) renderContractTable(snap state.Snapshot) {
+	fmt.Fprintf(d.writer, "\n%s--- Accepted Contracts & Outcomes (%d) ---%s\n", ansiCyan, len(snap.ContractLedger), ansiReset)
+	for i, c := range snap.ContractLedger {
+		resColor := ansiYellow
+		if c.Result == "Completed" {
+			resColor = ansiGreen
+		} else if strings.Contains(c.Result, "Failed") || strings.Contains(c.Result, "Stalled") {
+			resColor = ansiRed
+		}
+
+		logLabel := c.LogBanner
+		if logLabel == "" {
+			logLabel = fmt.Sprintf("Session #%d", c.ServerSess)
+		}
+		bpSuffix := ""
+		if c.Blueprint != "" {
+			bpSuffix = fmt.Sprintf(" {Template: %s}", c.Blueprint)
+		}
+		anomSuffix := ""
+		if len(c.Anomalies) > 0 {
+			anomSuffix = fmt.Sprintf(" %s[Anomalies: %s]%s", ansiRed, strings.Join(c.Anomalies, "; "), ansiReset)
+		}
+
+		fmt.Fprintf(d.writer, "  #%d [%s] (%s) %s%s%s -> %s%s%s [ID: %s]%s%s\n",
+			i+1,
+			logLabel,
+			formatTimestampShort(c.AcceptedAt),
+			ansiBold, c.ContractName, ansiReset,
+			resColor, c.Result, ansiReset,
+			c.MissionID,
+			bpSuffix,
+			anomSuffix,
+		)
+	}
 }
 
 // RunWatch begins a live dashboard rendering loop until ctx is cancelled.
@@ -119,29 +186,11 @@ func (d *Dashboard) renderLiveFrame(snap state.Snapshot) {
 	fmt.Fprintf(d.writer, "Lines Ingested         : %d\n", snap.TotalLinesProcessed)
 	fmt.Fprintf(d.writer, "Watcher Status         : %s%s%s\n", statusColor, getStatusLabel(isFlashing), ansiReset)
 
-	// Macro Session State
 	stateDesc := string(snap.CurrentSessionState)
 	if snap.ServerSessionIndex > 0 {
 		stateDesc = fmt.Sprintf("%s (Server Session #%d)", snap.CurrentSessionState, snap.ServerSessionIndex)
 	}
-	fmt.Fprintf(d.writer, "Session Lifecycle      : %s%s%s\n", ansiBold, stateDesc, ansiReset)
-
-	// Primary Subsumption Health
-	fmt.Fprintf(d.writer, "Subsumption AI Health  : ")
-	if snap.IsStartupSubsumptionBroken {
-		fmt.Fprintf(d.writer, "%s[TAINTED - FAILED ON LAUNCH]%s (%d startup errors)\n", ansiRed, ansiReset, snap.StartupSubsumptionErrCount)
-	} else if snap.SubsumptionErrCount > 0 {
-		fmt.Fprintf(d.writer, "%s[DEGRADED]%s (%d gameplay errors)\n", ansiYellow, ansiReset, snap.SubsumptionErrCount)
-	} else {
-		fmt.Fprintf(d.writer, "%s[NOMINAL]%s\n", ansiGreen, ansiReset)
-	}
-
-	fmt.Fprintf(d.writer, "DGS System Health      : ")
-	if snap.DGSFailureCount > 0 {
-		fmt.Fprintf(d.writer, "%s%d RPC Failures Detected%s\n", ansiRed, snap.DGSFailureCount, ansiReset)
-	} else {
-		fmt.Fprintf(d.writer, "%sNOMINAL%s\n", ansiGreen, ansiReset)
-	}
+	fmt.Fprintf(d.writer, "Current Session State  : %s%s%s\n", ansiBold, stateDesc, ansiReset)
 
 	lastMid := snap.LastMissionID
 	if lastMid == "" {
@@ -151,24 +200,79 @@ func (d *Dashboard) renderLiveFrame(snap state.Snapshot) {
 	if lastStatus == "" {
 		lastStatus = "Idle"
 	}
-	fmt.Fprintf(d.writer, "Contract Tracker       : %s%s%s (Status: %s%s%s)\n\n", ansiBold, lastMid, ansiReset, missionColor, lastStatus, ansiReset)
+	fmt.Fprintf(d.writer, "Contract Tracker       : %s%s%s (Status: %s%s%s)\n", ansiBold, lastMid, ansiReset, missionColor, lastStatus, ansiReset)
+	fmt.Fprintf(d.writer, "Event Counts           : %s\n", formatEventCounts(snap.EventCounts))
 
-	if len(snap.DesyncIncidents) > 0 {
-		fmt.Fprintf(d.writer, "%s⚠️  SMOKING GUN DETECTED: %d Desync Collision(s)%s\n", ansiRed, len(snap.DesyncIncidents), ansiReset)
-		for _, inc := range snap.DesyncIncidents {
-			tag := ""
-			if inc.IsStartupError {
-				tag = "[STARTUP SYMPTOM] "
-			}
-			fmt.Fprintf(d.writer, "    - [%s] %s%s\n", inc.IncidentAt, tag, inc.Description)
-		}
+	// Section 1: Detected State & Contract Transitions
+	fmt.Fprintf(d.writer, "\n%s── Detected State & Contract Changes ──────────────────────────────────%s\n", ansiCyan, ansiReset)
+	if len(snap.StateChanges) == 0 {
+		fmt.Fprintf(d.writer, "  Waiting for session or contract state changes...\n")
 	} else {
-		fmt.Fprintf(d.writer, "%sState Sync Status      : Clean / No Latent Corruption Detected%s\n", ansiGreen, ansiReset)
+		for _, ev := range snap.StateChanges {
+			ts := formatTimestampShort(ev.Timestamp)
+			color := ansiReset
+			if ev.Type == models.EventMissionAccepted || ev.Type == models.EventMissionCompleted {
+				color = ansiGreen
+			} else if ev.Type == models.EventMissionFailed || ev.Type == models.EventMissionAbandoned {
+				color = ansiYellow
+			}
+			fmt.Fprintf(d.writer, "  %s[%s] (%s) %s%s\n", color, ts, ev.SessionState, ev.Meaning, ansiReset)
+		}
 	}
 
-	if snap.LastEvent != nil {
-		fmt.Fprintf(d.writer, "\nRecent Event           : %s[%s] %s%s\n", statusColor, snap.LastEvent.Type, snap.LastEvent.Details, ansiReset)
+	// Section 2: Recent Log Entries in Plain English
+	fmt.Fprintf(d.writer, "\n%s── Recent Log Entries (Plain English) ─────────────────────────────────%s\n", ansiCyan, ansiReset)
+	if len(snap.RecentEvents) == 0 {
+		fmt.Fprintf(d.writer, "  No matching log entries detected yet...\n")
+	} else {
+		for idx, ev := range snap.RecentEvents {
+			ts := formatTimestampShort(ev.Timestamp)
+			lineColor := ansiReset
+			if idx == len(snap.RecentEvents)-1 && isFlashing {
+				lineColor = ansiYellow
+			}
+			fmt.Fprintf(d.writer, "  %s[%s] [%s] %s%s\n", lineColor, ts, ev.Type, ev.Meaning, ansiReset)
+		}
 	}
+
+	// Optional Section 3: Active Investigation Alerts (only shown if triggered by an enabled active_investigation filter)
+	if len(snap.DesyncIncidents) > 0 {
+		fmt.Fprintf(d.writer, "\n%s⚠️  ACTIVE INVESTIGATION INCIDENTS (%d)%s\n", ansiRed, len(snap.DesyncIncidents), ansiReset)
+		for _, inc := range snap.DesyncIncidents {
+			fmt.Fprintf(d.writer, "    - [%s] %s\n", inc.IncidentAt, inc.Description)
+		}
+	}
+}
+
+func formatTimestampShort(ts string) string {
+	if ts == "" {
+		return "N/A"
+	}
+	// If ISO-8601 like 2026-11-08T19:17:32.570Z, keep time portion for compact TUI readability
+	if len(ts) >= 19 && ts[10] == 'T' {
+		return ts[11:]
+	}
+	return ts
+}
+
+func formatEventCounts(counts map[models.EventType]int) string {
+	if len(counts) == 0 {
+		return "None"
+	}
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, string(k))
+	}
+	sort.Strings(keys)
+
+	out := ""
+	for i, k := range keys {
+		if i > 0 {
+			out += " | "
+		}
+		out += fmt.Sprintf("%s: %d", k, counts[models.EventType(k)])
+	}
+	return out
 }
 
 func getStatusLabel(flashing bool) string {

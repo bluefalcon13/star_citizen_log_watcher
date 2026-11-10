@@ -46,12 +46,12 @@ func run() error {
 	defer cancel()
 
 	// 3. Initialize Core Engine components via Dependency Injection
-	registry, err := filter.NewDefaultRegistry()
+	registry, err := filter.LoadOrCreateRegistry(cfg.FiltersPath)
 	if err != nil {
 		return fmt.Errorf("filter registry initialization failed: %w", err)
 	}
 
-	stateMgr := state.NewManager()
+	stateMgr := state.NewManagerWithPersistence(".sc_latent_state.json")
 	rec := recorder.NewRecorder(cfg.OutputPath, stateMgr)
 	proc := processor.NewProcessor(registry, stateMgr)
 	ing := ingestor.NewIngestor(250 * time.Millisecond)
@@ -115,7 +115,11 @@ func run() error {
 	}
 
 	// 7. Render final telemetry summary to terminal
-	dash.RenderStatic(stateMgr.Snapshot(), cfg.OutputPath)
+	if cfg.ContractsMode {
+		dash.RenderContracts(stateMgr.Snapshot(), cfg.OutputPath)
+	} else {
+		dash.RenderStatic(stateMgr.Snapshot(), cfg.OutputPath)
+	}
 
 	return nil
 }

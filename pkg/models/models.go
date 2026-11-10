@@ -32,6 +32,22 @@ const (
 	EventStateTransition EventType = "State Transition"
 	// EventServerDisconnect indicates the client disconnected from a server or exited to menu.
 	EventServerDisconnect EventType = "Server Disconnect"
+	// EventMissingDataBank indicates a mission objective marker failed because the player has no ObjectDataBank.
+	EventMissingDataBank EventType = "Missing ObjectDataBank"
+	// EventMarkerDataBankAdded indicates an objective marker bound to the player's ObjectDataBank.
+	EventMarkerDataBankAdded EventType = "Marker DataBank Added"
+	// EventMarkerDataBankRemoved indicates an objective marker unbound from the player's ObjectDataBank.
+	EventMarkerDataBankRemoved EventType = "Marker DataBank Removed"
+	// EventProximityLoss indicates the mission lost player zone tracking and spawned a 'Return to' local objective.
+	EventProximityLoss EventType = "Proximity Zone Loss"
+	// EventLocationStorm indicates repeated contract location generation for Collector/Wikelo contracts.
+	EventLocationStorm EventType = "Location Generator Storm"
+	// EventIdentityFault indicates a login metadata authentication failure (GetSubscriptionKey Failed).
+	EventIdentityFault EventType = "Identity Metadata Fault"
+	// EventHyperionStage indicates a Project Hyperion objective phase progression.
+	EventHyperionStage EventType = "Hyperion Stage"
+	// EventDeferredExplosion indicates a CDeferredExplosionEffect raycast (e.g. Hyperion bridge worm spawn).
+	EventDeferredExplosion EventType = "Deferred Explosion"
 )
 
 // SessionState represents the macro operational phase of the Star Citizen client.
@@ -71,11 +87,14 @@ type Event struct {
 	Severity      Severity
 	MissionID     string
 	ErrorGUID     string
+	Meaning       string
 	Details       string
 	RawLine       string
 	ParsedAt      time.Time
 	SessionState  SessionState
-	ServerSession int
+	TargetState   SessionState
+	ServerSession       int
+	ActiveInvestigation bool
 }
 
 // RawLogLine represents a single line of log text read from the source stream.

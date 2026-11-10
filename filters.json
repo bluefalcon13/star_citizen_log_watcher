@@ -1,0 +1,254 @@
+[
+  {
+    "name": "Mission Accepted",
+    "enabled": true,
+    "event_type": "Mission Accepted",
+    "severity": "INFO",
+    "pattern": "Contract Accepted: .* MissionId: \\[([a-f0-9\\-]{36})\\]",
+    "extract_type": "mission_id",
+    "target_state": "Gameplay",
+    "meaning": "Player accepted a contract",
+    "active_investigation": false
+  },
+  {
+    "name": "Mission Completed",
+    "enabled": true,
+    "event_type": "Mission Completed",
+    "severity": "INFO",
+    "pattern": "(?:Contract Complete: .* MissionId: \\[([a-f0-9\\-]{36})\\]|<EndMission>.*MissionId\\[([a-f0-9\\-]{36})\\].*CompletionType\\[Complete\\])",
+    "extract_type": "mission_id",
+    "meaning": "Contract completed successfully",
+    "active_investigation": false
+  },
+  {
+    "name": "Mission Failed",
+    "enabled": true,
+    "event_type": "Mission Failed",
+    "severity": "WARNING",
+    "pattern": "(?:Contract Failed: .* MissionId: \\[([a-f0-9\\-]{36})\\]|<EndMission>.*MissionId\\[([a-f0-9\\-]{36})\\].*CompletionType\\[Fail\\w*\\])",
+    "extract_type": "mission_id",
+    "meaning": "Contract failed",
+    "active_investigation": false
+  },
+  {
+    "name": "Mission Abandoned",
+    "enabled": true,
+    "event_type": "Mission Abandoned",
+    "severity": "WARNING",
+    "pattern": "(?:Contract Abandoned: .* MissionId: \\[([a-f0-9\\-]{36})\\]|<EndMission>.*MissionId\\[([a-f0-9\\-]{36})\\].*CompletionType\\[Abandon\\])",
+    "extract_type": "mission_id",
+    "meaning": "Contract abandoned by player",
+    "active_investigation": false
+  },
+  {
+    "name": "Objective Spawned",
+    "enabled": true,
+    "event_type": "Objective Spawned",
+    "severity": "INFO",
+    "pattern": "CLocalMissionPhaseMarker::CreateMarker.*missionId \\[([a-f0-9\\-]{36})\\]",
+    "extract_type": "mission_id",
+    "target_state": "Gameplay",
+    "meaning": "Mission objective marker spawned in world",
+    "active_investigation": false
+  },
+  {
+    "name": "Missing Player ObjectDataBank",
+    "enabled": true,
+    "event_type": "Missing ObjectDataBank",
+    "severity": "CRITICAL",
+    "pattern": "\u003cCObjectiveMarkerComponent::(?:AddTo|RemoveFrom)PlayerDataBank\u003e (MissionObjectiveMarker_\\d+\\[\\d+\\]) - Player: .* has no ObjectDataBank",
+    "extract_type": "none",
+    "meaning": "ACTIVE INVESTIGATION: Player entity has no ObjectDataBank for mission objective marker",
+    "active_investigation": true
+  },
+  {
+    "name": "Objective Marker DataBank Added",
+    "enabled": true,
+    "event_type": "Marker DataBank Added",
+    "severity": "INFO",
+    "pattern": "\u003cCObjectiveMarkerComponent::AddToPlayerDataBank\u003e (MissionObjectiveMarker_\\d+\\[\\d+\\]) - Added to DataBank",
+    "extract_type": "none",
+    "meaning": "Objective marker bound to player DataBank",
+    "active_investigation": false
+  },
+  {
+    "name": "Objective Marker DataBank Removed",
+    "enabled": true,
+    "event_type": "Marker DataBank Removed",
+    "severity": "WARNING",
+    "pattern": "\u003cCObjectiveMarkerComponent::RemoveFromPlayerDataBank\u003e (MissionObjectiveMarker_\\d+\\[\\d+\\]) - Removed from DataBank",
+    "extract_type": "none",
+    "meaning": "Objective marker unbound from player DataBank",
+    "active_investigation": false
+  },
+  {
+    "name": "Proximity Loss ('Return to' Loop)",
+    "enabled": true,
+    "event_type": "Proximity Zone Loss",
+    "severity": "CRITICAL",
+    "pattern": "\u003cSHUDEvent_OnNotification\u003e Added notification \"New Objective: Return to [^\"]+\".*MissionId: \\[([a-f0-9\\-]{36})\\]",
+    "extract_type": "mission_id",
+    "meaning": "ACTIVE INVESTIGATION: Mission lost player proximity and triggered 'Return to' local objective loop",
+    "active_investigation": true
+  },
+  {
+    "name": "Collector Contract Generator Storm",
+    "enabled": true,
+    "event_type": "Location Generator Storm",
+    "severity": "WARNING",
+    "pattern": "\u003cGenerateLocationProperty\u003e Generated Locations .* contract: (TheCollector_\\S+)",
+    "extract_type": "none",
+    "meaning": "Wikelo / Collector contract generator location spam (server/reputation noise)",
+    "active_investigation": false
+  },
+  {
+    "name": "Login Identity Metadata Fault",
+    "enabled": true,
+    "event_type": "Identity Metadata Fault",
+    "severity": "WARNING",
+    "pattern": "\u003cGetSubscriptionKey Failed\u003e.*No player Id was found in metadata",
+    "extract_type": "none",
+    "meaning": "Login metadata missing player ID (GetSubscriptionKey UNAUTHENTICATED)",
+    "active_investigation": false
+  },
+  {
+    "name": "Hyperion Engineering Wing Objective",
+    "enabled": true,
+    "event_type": "Hyperion Stage",
+    "severity": "INFO",
+    "pattern": "\u003cSHUDEvent_OnNotification\u003e Added notification \"New Objective: Retrieve One of the Reagent Codes in Engineering Wing: \".*MissionId: \\[([a-f0-9\\-]{36})\\]",
+    "extract_type": "mission_id",
+    "meaning": "Hyperion: Arrived at ASD Onyx Facility (Engineering Wing objective active)",
+    "active_investigation": true
+  },
+  {
+    "name": "Hyperion Interior Triggered",
+    "enabled": true,
+    "event_type": "Hyperion Stage",
+    "severity": "INFO",
+    "pattern": "\u003cSHUDEvent_OnNotification\u003e Added notification \"New Objective: Obtain Thermal (?:Vent|Condenser) Diagnostic Data.*MissionId: \\[([a-f0-9\\-]{36})\\]",
+    "extract_type": "mission_id",
+    "meaning": "Hyperion: Engineering Wing interior Subsumption trigger fired (Healthy)",
+    "active_investigation": false
+  },
+  {
+    "name": "Deferred Explosion RayCast (Worm Spawn)",
+    "enabled": true,
+    "event_type": "Deferred Explosion",
+    "severity": "INFO",
+    "pattern": "CDeferredExplosionEffect::RequestRayCast has no grid set, defaulting to global grid",
+    "extract_type": "none",
+    "meaning": "Deferred Explosion RayCast (Hyperion bridge worm spawn / encounter trigger)",
+    "active_investigation": false
+  },
+  {
+    "name": "Application Launch / Log Header",
+    "enabled": true,
+    "event_type": "State Transition",
+    "severity": "NOTICE",
+    "pattern": "BackupNameAttachment=\"\\s*([^\"]+)\"",
+    "target_state": "Application Launch",
+    "meaning": "Application Launch",
+    "active_investigation": false
+  },
+  {
+    "name": "DGS Failure",
+    "enabled": true,
+    "event_type": "DGS Failure",
+    "severity": "CRITICAL",
+    "pattern": "!!! Failed to register RPC \\[RPC\\.DGS\\..*\\]",
+    "extract_type": "none",
+    "meaning": "DGS RPC registration failed",
+    "active_investigation": false
+  },
+  {
+    "name": "Subsumption Error",
+    "enabled": true,
+    "event_type": "Subsumption Error",
+    "severity": "ERROR",
+    "pattern": "\\[Error\\] \u003c\\[Subsumption::ErrorReporter\\]\u003e .* \\(GUID:([a-f0-9\\-]{36})\\)",
+    "extract_type": "error_guid",
+    "meaning": "Subsumption ErrorReporter logged a GUID issue",
+    "active_investigation": false
+  },
+  {
+    "name": "Subsumption Mismatch",
+    "enabled": true,
+    "event_type": "Subsumption Mismatch",
+    "severity": "ERROR",
+    "pattern": "Failed to create Subsumption (?:task|variable|dependency) .* associated with the guid '([a-f0-9\\-]{36})'",
+    "extract_type": "error_guid",
+    "meaning": "Subsumption missing archetype or dependency GUID",
+    "active_investigation": false
+  },
+  {
+    "name": "Contract Status",
+    "enabled": true,
+    "event_type": "Contract Status",
+    "severity": "INFO",
+    "pattern": "CContractGenerator::CContractGenerator.*(completed|failed|closed|Status:\\s*\\w+)",
+    "extract_type": "status",
+    "meaning": "Contract generator updated contract status",
+    "active_investigation": false
+  },
+  {
+    "name": "Contract Init",
+    "enabled": true,
+    "event_type": "Contract Init",
+    "severity": "NOTICE",
+    "pattern": "CContractGenerator::CContractGenerator",
+    "extract_type": "none",
+    "meaning": "Contract generator subsystem initialized",
+    "active_investigation": false
+  },
+  {
+    "name": "Mission Result",
+    "enabled": true,
+    "event_type": "Mission Result",
+    "severity": "INFO",
+    "pattern": "(?i)(?:Contract|Mission).*?(?:result|outcome)\\s+is\\s+(Success|Failure|Completed|Failed)",
+    "extract_type": "result",
+    "meaning": "Engine validated mission outcome",
+    "active_investigation": false
+  },
+  {
+    "name": "Main Menu Loaded",
+    "enabled": true,
+    "event_type": "State Transition",
+    "severity": "NOTICE",
+    "pattern": "(?i)(?:RequestFrontEndReason=\"ProcessBootRequest\"|Requesting game mode Frontend_Main/SC_Frontend|CEntityComponentFrontendPUUIProvider::AddAccessibleDestinations)",
+    "target_state": "Main Menu",
+    "meaning": "Main Menu loaded",
+    "active_investigation": false
+  },
+  {
+    "name": "Joining Server Handshake",
+    "enabled": true,
+    "event_type": "State Transition",
+    "severity": "NOTICE",
+    "pattern": "(?i)(?:remoteAddr=\\d+\\.\\d+\\.\\d+\\.\\d+.*gamerules=\"SC_Frontend\"|CDisciplineServiceExternal::BeginSession|gamerules=\"SC_Default\".*taskname=\"ModelWaitForViews\"|ConnectToServer)",
+    "target_state": "Joining Server",
+    "meaning": "Connecting to game server (DGS handshake)",
+    "active_investigation": false
+  },
+  {
+    "name": "Gameplay Spawn Complete",
+    "enabled": true,
+    "event_type": "State Transition",
+    "severity": "NOTICE",
+    "pattern": "(?i)(?:taskname=\"StopLoadingScreen\".*gamerules=\"SC_Default\"|taskname=\"OnClientEnteredGame\".*gamerules=\"SC_Default\"|Local player spawned|Client entered world)",
+    "target_state": "Gameplay",
+    "meaning": "Entered game world (Gameplay active)",
+    "active_investigation": false
+  },
+  {
+    "name": "Server Disconnect / Exit Menu",
+    "enabled": true,
+    "event_type": "Server Disconnect",
+    "severity": "NOTICE",
+    "pattern": "(?i)(?:Remote Disconnect - Player requested disconnect|EALobbyQuit.*RequestQuitLobby|\\[CSessionManager::RequestFrontEnd\\] Restored)",
+    "target_state": "Main Menu",
+    "meaning": "Disconnected from server (returned to Main Menu)",
+    "active_investigation": false
+  }
+]

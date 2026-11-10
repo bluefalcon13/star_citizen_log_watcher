@@ -98,12 +98,10 @@ func (r *Recorder) RenderReport(w io.Writer, snap state.Snapshot, events []model
 	fmt.Fprintf(w, "| :--- | :--- |\n")
 	if snap.IsStartupSubsumptionBroken {
 		fmt.Fprintf(w, "| **Client Subsumption AI** | ❌ **CRITICAL: BROKEN AT APPLICATION LAUNCH** (%d startup error(s)) |\n", snap.StartupSubsumptionErrCount)
-	} else if snap.SubsumptionErrCount > 0 {
-		fmt.Fprintf(w, "| **Client Subsumption AI** | ⚠️ **DEGRADED IN GAMEPLAY** (%d error(s)) |\n", snap.SubsumptionErrCount)
 	} else {
-		fmt.Fprintf(w, "| **Client Subsumption AI** | ✅ **NOMINAL** |\n")
+		fmt.Fprintf(w, "| **Subsumption Log Entries** | %d |\n", snap.SubsumptionErrCount)
 	}
-	fmt.Fprintf(w, "| **DGS RPC Health** | %d Failure(s) |\n", snap.DGSFailureCount)
+	fmt.Fprintf(w, "| **DGS RPC Notices** | %d |\n", snap.DGSFailureCount)
 	if snap.LastMissionID != "" {
 		fmt.Fprintf(w, "| **Last Contract Tracked** | `%s` [%s] |\n", snap.LastMissionID, snap.LastMissionStatus)
 	}
@@ -137,13 +135,49 @@ func (r *Recorder) RenderReport(w io.Writer, snap state.Snapshot, events []model
 		fmt.Fprintf(w, "\n")
 	}
 
+	// Section 2.5: Contract Ledger (Accepted Contracts & Outcomes)
+	fmt.Fprintf(w, "## 📜 [Contract Ledger: Accepted Contracts & Outcomes]\n\n")
+	if len(snap.ContractLedger) == 0 {
+		fmt.Fprintf(w, "No contracts accepted in this log.\n\n")
+	} else {
+		fmt.Fprintf(w, "| # | Log / Session | Accepted At | Contract Name | Blueprint / Template | Mission ID | Outcome | Notes / Anomalies |\n")
+		fmt.Fprintf(w, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+		for idx, c := range snap.ContractLedger {
+			logCol := c.LogBanner
+			if logCol == "" {
+				logCol = fmt.Sprintf("Session #%d", c.ServerSess)
+			}
+			accepted := c.AcceptedAt
+			if accepted == "" {
+				accepted = "N/A"
+			}
+			bp := c.Blueprint
+			if bp == "" {
+				bp = "—"
+			}
+			outcome := c.Result
+			if c.EndedAt != "" {
+				outcome = fmt.Sprintf("**%s** (`%s`)", c.Result, c.EndedAt)
+			} else {
+				outcome = fmt.Sprintf("**%s**", c.Result)
+			}
+			notes := "—"
+			if len(c.Anomalies) > 0 {
+				notes = strings.Join(c.Anomalies, "; ")
+			}
+			fmt.Fprintf(w, "| %d | `%s` | `%s` | **%s** | `%s` | `%s` | %s | %s |\n",
+				idx+1, cleanDetail(logCol), accepted, cleanDetail(c.ContractName), cleanDetail(bp), c.MissionID, outcome, cleanDetail(notes))
+		}
+		fmt.Fprintf(w, "\n")
+	}
+
 	// Section 3: Chronological Timeline
 	fmt.Fprintf(w, "## ⏱️ [Chronological Timeline]\n\n")
 	if len(events) == 0 {
 		fmt.Fprintf(w, "No timeline events recorded.\n")
 	} else {
-		fmt.Fprintf(w, "| Timestamp | State | Severity | Event Type | Mission ID | Error GUID | Details |\n")
-		fmt.Fprintf(w, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
+		fmt.Fprintf(w, "| Timestamp | State | Severity | Event Type | Meaning | Mission ID | Error GUID | Raw Details |\n")
+		fmt.Fprintf(w, "| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n")
 		for _, ev := range events {
 			mID := ev.MissionID
 			if mID == "" {
@@ -152,6 +186,10 @@ func (r *Recorder) RenderReport(w io.Writer, snap state.Snapshot, events []model
 			errGUID := ev.ErrorGUID
 			if errGUID == "" {
 				errGUID = "—"
+			}
+			meaning := cleanDetail(ev.Meaning)
+			if meaning == "" {
+				meaning = string(ev.Type)
 			}
 			detail := cleanDetail(ev.Details)
 			ts := ev.Timestamp
@@ -162,7 +200,7 @@ func (r *Recorder) RenderReport(w io.Writer, snap state.Snapshot, events []model
 			if stateCol == "" {
 				stateCol = "Init"
 			}
-			fmt.Fprintf(w, "| %s | %s | `%s` | %s | `%s` | `%s` | %s |\n", ts, stateCol, ev.Severity, ev.Type, mID, errGUID, detail)
+			fmt.Fprintf(w, "| %s | %s | `%s` | %s | %s | `%s` | `%s` | %s |\n", ts, stateCol, ev.Severity, ev.Type, meaning, mID, errGUID, detail)
 		}
 	}
 

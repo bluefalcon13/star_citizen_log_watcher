@@ -10,8 +10,18 @@ import (
 
 func TestEndToEndPipeline(t *testing.T) {
 	tempDir := t.TempDir()
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working dir: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir to tempDir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
 	logFile := filepath.Join(tempDir, "Game.log")
 	reportFile := filepath.Join(tempDir, "Forensic_Report.md")
+	filtersFile := filepath.Join(tempDir, "filters.json")
 
 	logContent := strings.Join([]string{
 		"<2026-10-21T05:01:00.000Z> CContractGenerator::CContractGenerator",
@@ -34,10 +44,15 @@ func TestEndToEndPipeline(t *testing.T) {
 		"StarCitizenLogWatcher",
 		"-file", logFile,
 		"-output", reportFile,
+		"-filters", filtersFile,
 	}
 
 	if err := run(); err != nil {
 		t.Fatalf("run() returned error: %v", err)
+	}
+
+	if _, err := os.Stat(filtersFile); err != nil {
+		t.Errorf("expected filters.json to be auto-created at %s: %v", filtersFile, err)
 	}
 
 	reportBytes, err := os.ReadFile(reportFile)
@@ -49,8 +64,8 @@ func TestEndToEndPipeline(t *testing.T) {
 	if !strings.Contains(report, "Star Citizen Forensic Black Box Report") {
 		t.Errorf("report missing expected title header")
 	}
-	if !strings.Contains(report, "The Smoking Gun") {
-		t.Errorf("report missing expected smoking gun section")
+	if !strings.Contains(report, "Player accepted a contract") {
+		t.Errorf("report missing expected plain-English meaning")
 	}
 	if !strings.Contains(report, "40a7a5ca-59da-11f1-55d5-d3a0356e3f93") {
 		t.Errorf("report missing expected mission GUID")
@@ -59,6 +74,15 @@ func TestEndToEndPipeline(t *testing.T) {
 
 func TestEndToEndPipeline_Directory(t *testing.T) {
 	tempDir := t.TempDir()
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("failed to get working dir: %v", err)
+	}
+	if err := os.Chdir(tempDir); err != nil {
+		t.Fatalf("failed to chdir to tempDir: %v", err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+
 	logDir := filepath.Join(tempDir, "logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		t.Fatalf("failed to create log dir: %v", err)
@@ -67,6 +91,7 @@ func TestEndToEndPipeline_Directory(t *testing.T) {
 	file1 := filepath.Join(logDir, "Game_Session1.log")
 	file2 := filepath.Join(logDir, "Game_Session2.log")
 	reportFile := filepath.Join(tempDir, "Directory_Report.md")
+	filtersFile := filepath.Join(tempDir, "filters.json")
 
 	content1 := "<2026-10-21T05:02:14.116Z> Contract Accepted: Bounty Hunt MissionId: [40a7a5ca-59da-11f1-55d5-d3a0356e3f93]\n"
 	content2 := "<2026-10-21T06:00:00.000Z> Contract Complete: Bounty Hunt MissionId: [40a7a5ca-59da-11f1-55d5-d3a0356e3f93]\n"
@@ -86,6 +111,7 @@ func TestEndToEndPipeline_Directory(t *testing.T) {
 		"StarCitizenLogWatcher",
 		"-dir", logDir,
 		"-output", reportFile,
+		"-filters", filtersFile,
 	}
 
 	if err := run(); err != nil {

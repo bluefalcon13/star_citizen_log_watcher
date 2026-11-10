@@ -47,9 +47,11 @@ func (p *Processor) Run(ctx context.Context, inCh <-chan models.RawLogLine, outC
 			}
 
 			if p.stateMgr != nil {
-				event.SessionState = p.stateMgr.CurrentState()
-				event.ServerSession = p.stateMgr.ServerSession()
-				p.stateMgr.Record(*event)
+				enriched, keep := p.stateMgr.RecordAndEnrich(*event)
+				if !keep {
+					continue
+				}
+				event = &enriched
 			}
 
 			select {

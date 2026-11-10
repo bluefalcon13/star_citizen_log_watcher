@@ -16,16 +16,18 @@ bin/
 example_logs/
 *.log
 *.log.old
+timeline_logs/
 
 # Local persistent state cache
 **/.sc_latent_state.json
 .sc_latent_state.json
 
 # Generated forensic reports
-Forensic_Report*.md
-Game_Report*.md
-Massive_combined_report*.md
-!Combined_Forensic_Report.md
+reports/
+*.md
+!QUICKSTART.md
+!README.md
+!ghost_investigation.md
 
 # IDE and OS metadata
 .vscode/
@@ -34,3 +36,6 @@ Massive_combined_report*.md
 Thumbs.db
 *.swp
 *.swo
+
+# Files used to guide codegen
+design_docs/

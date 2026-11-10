@@ -8,11 +8,13 @@ import (
 
 // Args holds validated command-line configuration for the application.
 type Args struct {
-	FilePath   string
-	Dir        string
-	WatchMode  bool
-	OutputPath string
-	Verbose    bool
+	FilePath      string
+	Dir           string
+	FiltersPath   string
+	WatchMode     bool
+	ContractsMode bool
+	OutputPath    string
+	Verbose       bool
 }
 
 // Parse parses and validates command-line flags according to the implementation plan.
@@ -27,7 +29,9 @@ func ParseArgs(arguments []string) (*Args, error) {
 	filePath := fs.String("file", "", "Path to the target Star Citizen log file (e.g. Game.log)")
 	legacyInput := fs.String("input", "", "Legacy alias for -file")
 	dirPath := fs.String("dir", "", "Directory containing .log files to batch process chronologically")
+	filtersPath := fs.String("filters", "filters.json", "Path to the JSON filter definitions file (created automatically if missing)")
 	watchMode := fs.Bool("watch", false, "Enable live watch/tail mode for active game sessions")
+	contractsMode := fs.Bool("contracts", false, "Scrape and list all accepted contracts and their outcomes")
 	outputPath := fs.String("output", "Forensic_Report.md", "Output path for the generated forensic report")
 	verbose := fs.Bool("verbose", false, "Enable verbose diagnostic output")
 
@@ -77,10 +81,12 @@ func ParseArgs(arguments []string) (*Args, error) {
 	}
 
 	return &Args{
-		FilePath:   targetFile,
-		Dir:        targetDir,
-		WatchMode:  *watchMode,
-		OutputPath: *outputPath,
-		Verbose:    *verbose,
+		FilePath:      targetFile,
+		Dir:           targetDir,
+		FiltersPath:   *filtersPath,
+		WatchMode:     *watchMode,
+		ContractsMode: *contractsMode,
+		OutputPath:    *outputPath,
+		Verbose:       *verbose,
 	}, nil
 }

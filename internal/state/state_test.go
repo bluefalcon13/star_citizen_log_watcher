@@ -17,13 +17,14 @@ func TestStateManager_StartupSubsumptionFailure(t *testing.T) {
 
 	guid := "40a7a5ca-59da-11f1-55d5-d3a0356e3f93"
 
-	// Simulate Subsumption error occurring during Application Launch (before game/menu)
+	// Simulate Subsumption error occurring during Application Launch with ActiveInvestigation enabled
 	mgr.Record(models.Event{
-		Timestamp: "2026-11-08T02:00:05.000Z",
-		Type:      models.EventSubsumptionError,
-		Severity:  models.SeverityError,
-		ErrorGUID: guid,
-		RawLine:   "[Error] <[Subsumption::ErrorReporter]> Failed to create variable",
+		Timestamp:           "2026-11-08T02:00:05.000Z",
+		Type:                models.EventSubsumptionError,
+		Severity:            models.SeverityError,
+		ErrorGUID:           guid,
+		RawLine:             "[Error] <[Subsumption::ErrorReporter]> Failed to create variable",
+		ActiveInvestigation: true,
 	})
 
 	snap := mgr.Snapshot()
@@ -82,14 +83,15 @@ func TestStateManager_ThreeWayContractVerification(t *testing.T) {
 		Details:   "Contract Complete: Bounty Hunt",
 	})
 
-	// Session 2: On next launch, startup Subsumption error occurs
+	// Session 2: On next launch, startup Subsumption error occurs with ActiveInvestigation enabled
 	mgr2 := NewManagerWithPersistence(persistPath)
 	mgr2.Record(models.Event{
-		Timestamp: "2026-11-08T10:00:02.000Z",
-		Type:      models.EventSubsumptionMismatch,
-		Severity:  models.SeverityError,
-		ErrorGUID: mid,
-		RawLine:   "Failed to create Subsumption task archetype missing",
+		Timestamp:           "2026-11-08T10:00:02.000Z",
+		Type:                models.EventSubsumptionMismatch,
+		Severity:            models.SeverityError,
+		ErrorGUID:           mid,
+		RawLine:             "Failed to create Subsumption task archetype missing",
+		ActiveInvestigation: true,
 	})
 
 	snap := mgr2.Snapshot()
@@ -132,11 +134,12 @@ func TestStateManager_CrossLaunchCausalLink(t *testing.T) {
 	// Session 2: Fresh launch next day. Application boots, Subsumption throws error for that GUID!
 	mgr2 := NewManagerWithPersistence(persistPath)
 	mgr2.Record(models.Event{
-		Timestamp: "2026-11-08T10:00:02.000Z",
-		Type:      models.EventSubsumptionMismatch,
-		Severity:  models.SeverityError,
-		ErrorGUID: mid,
-		RawLine:   "Failed to create Subsumption task archetype missing",
+		Timestamp:           "2026-11-08T10:00:02.000Z",
+		Type:                models.EventSubsumptionMismatch,
+		Severity:            models.SeverityError,
+		ErrorGUID:           mid,
+		RawLine:             "Failed to create Subsumption task archetype missing",
+		ActiveInvestigation: true,
 	})
 
 	snap := mgr2.Snapshot()
